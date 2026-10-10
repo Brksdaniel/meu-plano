@@ -91,3 +91,43 @@ input:focus-visible, button:focus-visible { outline: 3px solid var(--plum); outl
 .tr.head { color: var(--muted); font-size: 12px; font-weight: 600; }
 .tr span:nth-child(n+2) { text-align: right; font-variant-numeric: tabular-nums; }
 .tabs button { padding: 10px 2px; font-size: 13px; }
+
+/* ===== Aba Treinos: tons de rosa ===== */
+body.rosa {
+  --bg: #FFF5F8; --card: #FFFFFF; --ink: #3A2430; --muted: #8F7080;
+  --line: #F8DCE8; --plum: #BE4A78; --plum-soft: #FDE6EF; --sun: #F4A9C0; --leaf: #D9628F;
+}
+html:has(body.rosa) { background: #FFF5F8; }
+body.rosa .tabs { background: rgba(255, 245, 248, .94); }
+.shell.wide { max-width: 940px; }
+
+select {
+  width: 100%; padding: 12px; border-radius: 12px; border: 1px solid var(--line);
+  background: #fff; color: var(--ink); font: inherit; font-size: 16px;
+}
+select:focus-visible { outline: 3px solid var(--plum); outline-offset: 1px; }
+
+.seg { display: flex; gap: 4px; background: var(--plum-soft); padding: 4px; border-radius: 14px; }
+.seg button { flex: 1; border: 0; background: none; padding: 10px 6px; border-radius: 11px; font-weight: 600; color: var(--muted); font-size: 14px; }
+.seg button.on { background: #fff; color: var(--plum); box-shadow: 0 1px 4px rgba(190, 74, 120, .15); }
+
+.chips { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 4px; }
+.chip { flex: 1; min-width: 44px; border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 8px 0; font-weight: 600; font-size: 13px; color: var(--muted); }
+.chip.on { background: var(--plum); border-color: var(--plum); color: #fff; }
+.chip.hoje:not(.on) { border-color: var(--plum); color: var(--plum); }
+
+.hero-treino { background: linear-gradient(135deg, #FFE0EC, #FFF4F8); border: 1px solid #F9D3E2; border-radius: 22px; padding: 18px; }
+.hero-treino h2 { margin: 0; }
+
+.grid-auto { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.ex-card { align-items: flex-start; }
+.ex-notes { font-size: 13px; color: var(--muted); margin-top: 3px; }
+.ex-edit { padding: 12px; }
+.ex-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.span2 { grid-column: 1 / -1; }
+.icon-btn:disabled { opacity: .3; }
+
+@media (max-width: 400px) {
+  .tabs { gap: 2px; padding-left: 6px; padding-right: 6px; }
+  .tabs button { font-size: 12px; padding: 10px 0; }
+}

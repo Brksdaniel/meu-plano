@@ -131,6 +131,11 @@ function App() {
   const [toast, setToast] = useState('')
   const sb = getSupabase()
 
+  useEffect(() => {
+    document.body.classList.toggle('rosa', aba === 'treinos')
+    return () => document.body.classList.remove('rosa')
+  }, [aba])
+
   const avisar = useCallback((t) => {
     setToast(t)
     setTimeout(() => setToast(''), 1800)
@@ -138,16 +143,17 @@ function App() {
 
   return (
     <>
-      <div className="shell">
+      <div className={'shell' + (aba === 'treinos' ? ' wide' : '')}>
         {aba === 'hoje' && <Hoje sb={sb} />}
         {aba === 'alimentos' && <Alimentos sb={sb} avisar={avisar} />}
         {aba === 'peso' && <Peso sb={sb} />}
         {aba === 'medidas' && <Medidas sb={sb} />}
+        {aba === 'treinos' && <Treinos sb={sb} avisar={avisar} />}
         <button className="linkish" style={{ marginTop: 28 }} onClick={() => sb.auth.signOut()}>Sair da conta</button>
       </div>
       {toast && <div className="toast" role="status">{toast}</div>}
       <nav className="tabs">
-        {[['hoje', 'Hoje'], ['alimentos', 'Alimentos'], ['peso', 'Peso'], ['medidas', 'Medidas']].map(([k, label]) => (
+        {[['hoje', 'Hoje'], ['alimentos', 'Alimentos'], ['peso', 'Peso'], ['medidas', 'Medidas'], ['treinos', 'Treinos']].map(([k, label]) => (
           <button key={k} className={aba === k ? 'on' : ''} onClick={() => setAba(k)}>{label}</button>
         ))}
       </nav>
@@ -458,19 +464,24 @@ function Grafico({ regs }) {
 /* ---------- PLANO DO DIA ---------- */
 
 function PlanoDoDia({ sb, dia }) {
-  const treino = TREINOS[new Date().getDay()]
+  const dow = new Date().getDay()
+  const [agenda, setAgenda] = useState(null)
+  const treino = agenda || TREINOS[dow]
   const [feitos, setFeitos] = useState(new Set())
   const [copos, setCopos] = useState(0)
   const [aviso, setAviso] = useState(false)
 
   const carregar = useCallback(async () => {
-    const [pl, ag] = await Promise.all([
+    const [pl, ag, sch] = await Promise.all([
       sb.from('plan_done').select('key').eq('day', dia),
       sb.from('water').select('glasses').eq('day', dia).maybeSingle(),
+      sb.from('workout_schedule').select('workout_id, workouts(name)').eq('weekday', dow).maybeSingle(),
     ])
     setFeitos(new Set((pl.data || []).map((x) => x.key)))
     setCopos(ag.data ? ag.data.glasses : 0)
-  }, [sb, dia])
+    const row = sch.data
+    setAgenda(row ? (row.workout_id ? { nome: (row.workouts && row.workouts.name) || 'Treino', musc: true } : { nome: 'Sem musculação (descanso)', musc: false }) : null)
+  }, [sb, dia, dow])
 
   useEffect(() => {
     carregar()
@@ -650,6 +661,312 @@ function Medidas({ sb }) {
           </div>
         ))}
       </div>
+    </>
+  )
+}
+
+
+/* ---------- TREINOS ---------- */
+
+const DIAS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
+const ORDEM_SEMANA = [1, 2, 3, 4, 5, 6, 0]
+const novoId = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2))
+const exVazio = () => ({ id: novoId(), name: '', sets: '', reps: '', notes: '' })
+const ex = (name, sets, reps, notes = '') => ({ id: novoId(), name, sets, reps, notes })
+
+// Sugestão inicial, só um ponto de partida: ela pode editar tudo.
+const EXEMPLOS = [
+  { dia: 1, name: 'Costas + bíceps', exercises: () => [ex('Puxada frontal', '3', '12'), ex('Remada baixa', '3', '12'), ex('Remada curvada', '3', '10'), ex('Rosca direta', '3', '12'), ex('Rosca martelo', '3', '12')] },
+  { dia: 2, name: 'Pernas (quadríceps + glúteo)', exercises: () => [ex('Agachamento', '4', '10'), ex('Leg press', '3', '12'), ex('Cadeira extensora', '3', '15'), ex('Afundo', '3', '10', 'Cada perna'), ex('Elevação pélvica', '3', '12')] },
+  { dia: 3, name: 'Peito + ombro + tríceps', exercises: () => [ex('Supino reto', '3', '10'), ex('Supino inclinado com halteres', '3', '12'), ex('Desenvolvimento', '3', '12'), ex('Elevação lateral', '3', '15'), ex('Tríceps na corda', '3', '12')] },
+  { dia: 4, name: 'Posterior + glúteo', exercises: () => [ex('Stiff', '4', '10'), ex('Mesa flexora', '3', '12'), ex('Cadeira abdutora', '3', '15'), ex('Glúteo na polia', '3', '12'), ex('Elevação pélvica', '3', '12')] },
+  { dia: 5, name: 'Costas + bíceps (leve) + abdômen', exercises: () => [ex('Puxada neutra', '3', '12'), ex('Remada unilateral', '3', '12'), ex('Rosca alternada', '3', '12'), ex('Abdominal infra', '3', '15'), ex('Prancha', '3', '30s')] },
+]
+
+function Treinos({ sb, avisar }) {
+  const dia = hoje()
+  const dow = new Date().getDay()
+  const [view, setView] = useState('hoje')
+  const [diaVer, setDiaVer] = useState(dow)
+  const [treinos, setTreinos] = useState([])
+  const [agenda, setAgenda] = useState({})
+  const [feitos, setFeitos] = useState(new Set())
+  const [pronto, setPronto] = useState(false)
+  const [semTabelas, setSemTabelas] = useState(false)
+  const [edit, setEdit] = useState(null)
+
+  const carregar = useCallback(async () => {
+    const [w, s, p] = await Promise.all([
+      sb.from('workouts').select('*').order('created_at'),
+      sb.from('workout_schedule').select('*'),
+      sb.from('plan_done').select('key').eq('day', dia),
+    ])
+    setSemTabelas(Boolean(w.error))
+    setTreinos(w.data || [])
+    const mapa = {}
+    ;(s.data || []).forEach((r) => { mapa[r.weekday] = r.workout_id })
+    setAgenda(mapa)
+    setFeitos(new Set((p.data || []).map((x) => x.key)))
+    setPronto(true)
+  }, [sb, dia])
+
+  useEffect(() => { carregar() }, [carregar])
+
+  const definido = (d) => Object.prototype.hasOwnProperty.call(agenda, d)
+  const treinoDoDia = (d) => (definido(d) && agenda[d] ? treinos.find((t) => t.id === agenda[d]) || null : null)
+
+  async function marcarEx(id) {
+    const key = 'ex:' + id
+    if (feitos.has(key)) await sb.from('plan_done').delete().eq('key', key).eq('day', dia)
+    else await sb.from('plan_done').insert({ key, day: dia })
+    carregar()
+  }
+
+  async function definirDia(d, val) {
+    if (val === 'default') await sb.from('workout_schedule').delete().eq('weekday', d)
+    else await sb.from('workout_schedule').upsert({ weekday: d, workout_id: val === 'rest' ? null : val }, { onConflict: 'user_id,weekday' })
+    carregar()
+  }
+
+  async function carregarExemplos() {
+    const linhas = EXEMPLOS.map((e) => ({ name: e.name, notes: 'Sugestão inicial: ajuste exercícios, séries e cargas do seu jeito.', exercises: e.exercises() }))
+    const { data, error } = await sb.from('workouts').insert(linhas).select()
+    if (error || !data) return avisar('Não foi possível criar os treinos')
+    const porNome = Object.fromEntries(data.map((w) => [w.name, w.id]))
+    const agendaNova = [0, 1, 2, 3, 4, 5, 6].map((d) => {
+      const e = EXEMPLOS.find((x) => x.dia === d)
+      return { weekday: d, workout_id: e ? porNome[e.name] : null }
+    })
+    await sb.from('workout_schedule').upsert(agendaNova, { onConflict: 'user_id,weekday' })
+    avisar('Treinos de exemplo criados')
+    carregar()
+  }
+
+  async function salvar(e) {
+    e.preventDefault()
+    const name = edit.name.trim()
+    if (!name) return
+    const exercises = edit.exercises.filter((x) => x.name.trim()).map((x) => ({ ...x, name: x.name.trim() }))
+    const payload = { name, notes: edit.notes.trim(), exercises }
+    const { error } = edit.id ? await sb.from('workouts').update(payload).eq('id', edit.id) : await sb.from('workouts').insert(payload)
+    if (error) return avisar('Não foi possível salvar')
+    setEdit(null)
+    carregar()
+  }
+
+  async function excluir(t) {
+    if (!confirm('Excluir "' + t.name + '"? Os dias que usam esse treino voltam a ficar sem definição.')) return
+    await sb.from('workouts').delete().eq('id', t.id)
+    carregar()
+  }
+
+  const setEx = (i, campo, v) => setEdit({ ...edit, exercises: edit.exercises.map((x, j) => (j === i ? { ...x, [campo]: v } : x)) })
+  const addEx = () => setEdit({ ...edit, exercises: [...edit.exercises, exVazio()] })
+  const delEx = (i) => setEdit({ ...edit, exercises: edit.exercises.filter((_, j) => j !== i) })
+  const mover = (i, d) => {
+    const a = [...edit.exercises]
+    const j = i + d
+    if (j < 0 || j >= a.length) return
+    ;[a[i], a[j]] = [a[j], a[i]]
+    setEdit({ ...edit, exercises: a })
+  }
+
+  if (!pronto) return null
+
+  if (semTabelas) {
+    return (
+      <>
+        <h1>Treinos</h1>
+        <div className="card empty">Falta criar as tabelas dos treinos. Rode o arquivo <b>schema-v3.sql</b> no SQL Editor do Supabase e abra o app de novo.</div>
+      </>
+    )
+  }
+
+  /* ----- editor ----- */
+  if (edit) {
+    return (
+      <>
+        <h1>{edit.id ? 'Editar treino' : 'Novo treino'}</h1>
+        <p className="sub">Monte os exercícios com séries, repetições e observações.</p>
+        <form className="stack" onSubmit={salvar}>
+          <input type="text" placeholder="Nome do treino (ex.: Pernas e glúteo)" value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} required />
+          <input type="text" placeholder="Observação do treino (opcional)" value={edit.notes} onChange={(e) => setEdit({ ...edit, notes: e.target.value })} />
+
+          <h2>Exercícios</h2>
+          <div className="grid-auto">
+            {edit.exercises.map((x, i) => (
+              <div key={x.id} className="card ex-edit">
+                <div className="row between" style={{ marginBottom: 8 }}>
+                  <span className="pill">{i + 1}</span>
+                  <span>
+                    <button type="button" className="icon-btn" aria-label="Subir" onClick={() => mover(i, -1)} disabled={i === 0}>↑</button>
+                    <button type="button" className="icon-btn" aria-label="Descer" onClick={() => mover(i, 1)} disabled={i === edit.exercises.length - 1}>↓</button>
+                    <button type="button" className="icon-btn" aria-label="Remover exercício" onClick={() => delEx(i)}>×</button>
+                  </span>
+                </div>
+                <div className="ex-fields">
+                  <input className="span2" type="text" placeholder="Exercício" value={x.name} onChange={(e) => setEx(i, 'name', e.target.value)} />
+                  <label className="campo"><span>Séries</span><input type="text" inputMode="numeric" value={x.sets} onChange={(e) => setEx(i, 'sets', e.target.value)} /></label>
+                  <label className="campo"><span>Repetições</span><input type="text" placeholder="12 ou 10-12" value={x.reps} onChange={(e) => setEx(i, 'reps', e.target.value)} /></label>
+                  <input className="span2" type="text" placeholder="Observação (carga, descanso...)" value={x.notes} onChange={(e) => setEx(i, 'notes', e.target.value)} />
+                </div>
+              </div>
+            ))}
+          </div>
+          <button type="button" className="btn ghost" onClick={addEx}>+ Adicionar exercício</button>
+
+          <div className="row" style={{ marginTop: 6 }}>
+            <button type="button" className="btn ghost grow" onClick={() => setEdit(null)}>Cancelar</button>
+            <button className="btn grow">Salvar treino</button>
+          </div>
+        </form>
+      </>
+    )
+  }
+
+  const novoTreino = () => setEdit({ name: '', notes: '', exercises: [exVazio()] })
+  const editar = (t) => setEdit({ id: t.id, name: t.name, notes: t.notes || '', exercises: (t.exercises || []).map((x) => ({ ...x })) })
+
+  const verTreino = treinoDoDia(diaVer)
+  const verDefinido = definido(diaVer)
+  const eHoje = diaVer === dow
+  const exs = verTreino ? verTreino.exercises || [] : []
+  const feitosN = exs.filter((x) => feitos.has('ex:' + x.id)).length
+
+  return (
+    <>
+      <h1>Treinos</h1>
+      <p className="sub">Seus treinos da semana, do jeito que você quiser.</p>
+
+      <div className="seg" role="tablist">
+        {[['hoje', 'Treino do dia'], ['semana', 'Semana'], ['treinos', 'Meus treinos']].map(([k, label]) => (
+          <button key={k} role="tab" aria-selected={view === k} className={view === k ? 'on' : ''} onClick={() => setView(k)}>{label}</button>
+        ))}
+      </div>
+
+      {/* ----- TREINO DO DIA ----- */}
+      {view === 'hoje' && (
+        <>
+          <div className="chips" style={{ marginTop: 14 }}>
+            {ORDEM_SEMANA.map((d) => (
+              <button key={d} className={'chip' + (diaVer === d ? ' on' : '') + (d === dow ? ' hoje' : '')} onClick={() => setDiaVer(d)} aria-label={DIAS[d]}>{DIAS[d].slice(0, 3)}</button>
+            ))}
+          </div>
+
+          {treinos.length === 0 && (
+            <div className="card empty" style={{ marginTop: 10 }}>
+              Você ainda não tem treinos cadastrados.
+              <div className="row" style={{ justifyContent: 'center', marginTop: 12, flexWrap: 'wrap' }}>
+                <button className="btn" onClick={novoTreino}>Criar meu primeiro treino</button>
+                <button className="btn ghost" onClick={carregarExemplos}>Usar treinos de exemplo</button>
+              </div>
+            </div>
+          )}
+
+          {treinos.length > 0 && verDefinido && !verTreino && (
+            <div className="hero-treino" style={{ marginTop: 10 }}>
+              <h2>Dia de descanso</h2>
+              <p className="sub" style={{ margin: '6px 0 0' }}>{DIAS[diaVer]} sem musculação. Hidrate-se e, se quiser, faça uma caminhada leve.</p>
+            </div>
+          )}
+
+          {treinos.length > 0 && !verDefinido && (
+            <div className="hero-treino" style={{ marginTop: 10 }}>
+              <h2>Nenhum treino definido</h2>
+              <p className="sub" style={{ margin: '6px 0 10px' }}>Escolha o treino de {DIAS[diaVer].toLowerCase()} na aba Semana.</p>
+              <button className="btn small" onClick={() => setView('semana')}>Definir agora</button>
+            </div>
+          )}
+
+          {verTreino && (
+            <>
+              <div className="hero-treino" style={{ marginTop: 10 }}>
+                <div className="row between">
+                  <div className="s" style={{ fontSize: 13, color: 'var(--muted)' }}>{eHoje ? 'Hoje' : DIAS[diaVer]} · {exs.length} {exs.length === 1 ? 'exercício' : 'exercícios'}</div>
+                  {eHoje && exs.length > 0 && <span className="pill">{feitosN} de {exs.length}</span>}
+                </div>
+                <h2 style={{ fontSize: 22, margin: '4px 0 0' }}>{verTreino.name}</h2>
+                {verTreino.notes && <p className="sub" style={{ margin: '6px 0 0' }}>{verTreino.notes}</p>}
+              </div>
+              <div className="grid-auto" style={{ marginTop: 10 }}>
+                {exs.length === 0 && <div className="empty">Este treino ainda não tem exercícios. Adicione em Meus treinos.</div>}
+                {exs.map((x) => {
+                  const on = feitos.has('ex:' + x.id)
+                  return (
+                    <div key={x.id} className="card item ex-card">
+                      {eHoje ? (
+                        <button className={'check' + (on ? ' on' : '')} aria-pressed={on} aria-label={(on ? 'Desmarcar ' : 'Marcar como feito: ') + x.name} onClick={() => marcarEx(x.id)}>{on ? '✓' : ''}</button>
+                      ) : null}
+                      <div className="grow">
+                        <div className={'t' + (on ? ' done-text' : '')}>{x.name}</div>
+                        {x.notes && <div className="ex-notes">{x.notes}</div>}
+                      </div>
+                      <span className="pill">{x.sets || '–'} × {x.reps || '–'}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {/* ----- SEMANA ----- */}
+      {view === 'semana' && (
+        <>
+          <h2>Treino de cada dia</h2>
+          {treinos.length === 0 && <div className="card empty">Crie ao menos um treino em Meus treinos para poder escolher aqui.</div>}
+          <div className="grid-auto">
+            {ORDEM_SEMANA.map((d) => {
+              const valor = definido(d) ? (agenda[d] ? agenda[d] : 'rest') : 'default'
+              return (
+                <div key={d} className="card day-row">
+                  <div className="row between" style={{ marginBottom: 8 }}>
+                    <b>{DIAS[d]}</b>
+                    {d === dow && <span className="pill">Hoje</span>}
+                  </div>
+                  <select value={valor} onChange={(e) => definirDia(d, e.target.value)} aria-label={'Treino de ' + DIAS[d]}>
+                    <option value="default">Sem definir</option>
+                    <option value="rest">Descanso</option>
+                    {treinos.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  </select>
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
+
+      {/* ----- MEUS TREINOS ----- */}
+      {view === 'treinos' && (
+        <>
+          <div className="row between" style={{ margin: '18px 0 10px' }}>
+            <h2 style={{ margin: 0 }}>Meus treinos</h2>
+            <button className="btn small" onClick={novoTreino}>+ Novo treino</button>
+          </div>
+          {treinos.length === 0 && (
+            <div className="card empty">
+              Nenhum treino cadastrado.
+              <div style={{ marginTop: 12 }}><button className="btn ghost" onClick={carregarExemplos}>Usar treinos de exemplo</button></div>
+            </div>
+          )}
+          <div className="grid-auto">
+            {treinos.map((t) => {
+              const lista = t.exercises || []
+              return (
+                <div key={t.id} className="card item ex-card">
+                  <div className="grow">
+                    <div className="t"><b>{t.name}</b></div>
+                    <div className="s">{lista.length} {lista.length === 1 ? 'exercício' : 'exercícios'}{lista.length ? ' · ' + lista.slice(0, 3).map((x) => x.name).join(', ') + (lista.length > 3 ? '…' : '') : ''}</div>
+                  </div>
+                  <button className="btn small ghost" onClick={() => editar(t)}>Editar</button>
+                  <button className="icon-btn" aria-label={'Excluir ' + t.name} onClick={() => excluir(t)}>×</button>
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
     </>
   )
 }
