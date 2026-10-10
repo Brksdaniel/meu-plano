@@ -131,11 +131,6 @@ function App() {
   const [toast, setToast] = useState('')
   const sb = getSupabase()
 
-  useEffect(() => {
-    document.body.classList.toggle('rosa', aba === 'treinos')
-    return () => document.body.classList.remove('rosa')
-  }, [aba])
-
   const avisar = useCallback((t) => {
     setToast(t)
     setTimeout(() => setToast(''), 1800)
