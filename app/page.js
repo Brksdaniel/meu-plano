@@ -23,6 +23,44 @@ const SUGESTOES = [
   { name: 'Whey protein', unit: '1 scoop (30 g)', protein: 24 },
 ]
 
+const REAVALIACAO_PADRAO = '2026-10-19' // peso + medidas, de manhã, em jejum, fora da menstruação
+
+const TREINOS = [
+  { nome: 'Sem musculação (descanso)', musc: false }, // domingo
+  { nome: 'Costas + bíceps', musc: true },
+  { nome: 'Pernas (quadríceps + glúteo)', musc: true },
+  { nome: 'Peito + ombro + tríceps', musc: true },
+  { nome: 'Posterior + glúteo', musc: true },
+  { nome: 'Costas + bíceps (mais leve) + abdômen', musc: true },
+  { nome: 'Sem musculação (descanso)', musc: false }, // sábado
+]
+
+const CARDAPIO = [
+  { k: 'cafe', t: 'Café da manhã', d: '2 ovos mexidos · 1 pão com 1 fatia de mussarela · 1 copo de leite (200 ml)' },
+  { k: 'almoco', t: 'Almoço', d: '4 a 5 colheres de arroz · 2 ovos ou a mistura do dia · salada ou legume, se tiver' },
+  { k: 'lanche', t: 'Lanche da tarde', d: 'Pão + 2 fatias de presunto + 1 de mussarela · 1 fruta, quando tiver' },
+  { k: 'jantar', t: 'Jantar', d: '2 a 3 colheres de arroz · omelete de 2 ovos com 1 fatia de presunto · 1 copo de leite, se tiver espaço' },
+]
+
+// Medidas de quando pesava 60 kg (referência)
+const MEDIDAS = [
+  { k: 'peso', label: 'Peso (kg)', base: 60 },
+  { k: 'cintura', label: 'Cintura', base: 69 },
+  { k: 'quadril', label: 'Quadril', base: 90 },
+  { k: 'gluteo', label: 'Glúteo', base: 94 },
+  { k: 'culote', label: 'Culote', base: 89 },
+  { k: 'coxa_d', label: 'Coxa D', base: 58 },
+  { k: 'coxa_e', label: 'Coxa E', base: 58 },
+  { k: 'pan_d', label: 'Panturrilha D', base: 34 },
+  { k: 'pan_e', label: 'Panturrilha E', base: 34 },
+  { k: 'torax', label: 'Tórax', base: 87 },
+  { k: 'ombros', label: 'Ombros', base: 102 },
+  { k: 'braco_d', label: 'Braço D', base: 31 },
+  { k: 'braco_e', label: 'Braço E', base: 31 },
+  { k: 'ante_d', label: 'Antebraço D', base: 24 },
+  { k: 'ante_e', label: 'Antebraço E', base: 24 },
+]
+
 export default function Page() {
   const [session, setSession] = useState(null)
   const [ready, setReady] = useState(false)
@@ -104,11 +142,12 @@ function App() {
         {aba === 'hoje' && <Hoje sb={sb} />}
         {aba === 'alimentos' && <Alimentos sb={sb} avisar={avisar} />}
         {aba === 'peso' && <Peso sb={sb} />}
+        {aba === 'medidas' && <Medidas sb={sb} />}
         <button className="linkish" style={{ marginTop: 28 }} onClick={() => sb.auth.signOut()}>Sair da conta</button>
       </div>
       {toast && <div className="toast" role="status">{toast}</div>}
       <nav className="tabs">
-        {[['hoje', 'Hoje'], ['alimentos', 'Alimentos'], ['peso', 'Peso']].map(([k, label]) => (
+        {[['hoje', 'Hoje'], ['alimentos', 'Alimentos'], ['peso', 'Peso'], ['medidas', 'Medidas']].map(([k, label]) => (
           <button key={k} className={aba === k ? 'on' : ''} onClick={() => setAba(k)}>{label}</button>
         ))}
       </nav>
@@ -208,6 +247,8 @@ function Hoje({ sb }) {
           <button className="linkish" onClick={mudarMeta}>Mudar meta</button>
         </div>
       </div>
+
+      <PlanoDoDia sb={sb} dia={dia} />
 
       <h2>O que comi</h2>
       <form className="form" onSubmit={addRefeicao}>
@@ -360,6 +401,9 @@ function Peso({ sb }) {
     <>
       <h1>Peso</h1>
       <p className="sub">Pese-se sempre no mesmo horário para comparar melhor.</p>
+      <div className="card" style={{ marginBottom: 14, fontSize: 14, lineHeight: 1.5 }}>
+        <b>Meta: 60 kg.</b> No ritmo seguro de 0,5 a 0,75 kg por semana, a previsão é por volta de <b>março de 2027</b>. A perda não é linear: olhe a tendência de várias semanas e as medidas.
+      </div>
 
       <form className="form weight" onSubmit={add}>
         <input type="date" value={dia} onChange={(e) => setDia(e.target.value)} />
@@ -407,5 +451,205 @@ function Grafico({ regs }) {
       <path d={d} fill="none" stroke="var(--plum)" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
       {pts.map((p, i) => <circle key={i} cx={p[0]} cy={p[1]} r="4" fill={i === pts.length - 1 ? 'var(--sun)' : 'var(--plum)'} />)}
     </svg>
+  )
+}
+
+
+/* ---------- PLANO DO DIA ---------- */
+
+function PlanoDoDia({ sb, dia }) {
+  const treino = TREINOS[new Date().getDay()]
+  const [feitos, setFeitos] = useState(new Set())
+  const [copos, setCopos] = useState(0)
+  const [aviso, setAviso] = useState(false)
+
+  const carregar = useCallback(async () => {
+    const [pl, ag] = await Promise.all([
+      sb.from('plan_done').select('key').eq('day', dia),
+      sb.from('water').select('glasses').eq('day', dia).maybeSingle(),
+    ])
+    setFeitos(new Set((pl.data || []).map((x) => x.key)))
+    setCopos(ag.data ? ag.data.glasses : 0)
+  }, [sb, dia])
+
+  useEffect(() => {
+    carregar()
+    setAviso(dia >= (localStorage.getItem('reavaliacao') || REAVALIACAO_PADRAO))
+  }, [carregar, dia])
+
+  async function marcar(key) {
+    if (feitos.has(key)) await sb.from('plan_done').delete().eq('key', key).eq('day', dia)
+    else await sb.from('plan_done').insert({ key, day: dia })
+    carregar()
+  }
+
+  async function mudarCopos(n) {
+    const v = Math.max(0, Math.min(20, copos + n))
+    setCopos(v)
+    await sb.from('water').upsert({ day: dia, glasses: v }, { onConflict: 'user_id,day' })
+  }
+
+  const linhas = [
+    ...CARDAPIO,
+    { k: 'bike', t: 'Bike · 30 min', d: treino.musc ? 'Todo dia' : 'Ritmo leve a moderado' },
+    ...(treino.musc ? [{ k: 'treino', t: 'Treino: ' + treino.nome, d: 'Musculação' }] : []),
+  ]
+  const feitosN = linhas.filter((l) => feitos.has(l.k)).length
+
+  return (
+    <>
+      {aviso && (
+        <div className="card" style={{ marginTop: 14, background: 'var(--plum-soft)', borderColor: 'var(--plum-soft)' }}>
+          <b>Dia de atualizar peso e medidas.</b>
+          <div className="sub" style={{ margin: '4px 0 0' }}>De manhã, em jejum e fora da menstruação. Registre na aba Medidas.</div>
+        </div>
+      )}
+      <h2>Plano de hoje <span className="pill" style={{ marginLeft: 6 }}>{feitosN} de {linhas.length}</span></h2>
+      <div className="stack">
+        {linhas.map((l) => {
+          const on = feitos.has(l.k)
+          return (
+            <div key={l.k} className="card item">
+              <button className={'check' + (on ? ' on' : '')} aria-label={(on ? 'Desmarcar ' : 'Marcar como feito: ') + l.t} aria-pressed={on} onClick={() => marcar(l.k)}>{on ? '✓' : ''}</button>
+              <div className="grow">
+                <div className={'t' + (on ? ' done-text' : '')}>{l.t}</div>
+                <div className="s">{l.d}</div>
+              </div>
+            </div>
+          )
+        })}
+        <div className="card item">
+          <div className="grow">
+            <div className="t">Água</div>
+            <div className="s">{copos} de 8 copos (meta: 2 L)</div>
+          </div>
+          <button className="icon-btn" aria-label="Menos um copo" onClick={() => mudarCopos(-1)}>−</button>
+          <button className="icon-btn add" aria-label="Mais um copo" onClick={() => mudarCopos(1)}>+</button>
+        </div>
+      </div>
+    </>
+  )
+}
+
+/* ---------- MEDIDAS ---------- */
+
+function Medidas({ sb }) {
+  const [regs, setRegs] = useState([])
+  const [dia, setDia] = useState(hoje())
+  const [vals, setVals] = useState({})
+  const [proxima, setProxima] = useState(REAVALIACAO_PADRAO)
+  const [erro, setErro] = useState('')
+
+  const carregar = useCallback(async () => {
+    const { data } = await sb.from('measurements').select('*').order('day').order('created_at')
+    setRegs(data || [])
+  }, [sb])
+
+  useEffect(() => {
+    setProxima(localStorage.getItem('reavaliacao') || REAVALIACAO_PADRAO)
+    carregar()
+  }, [carregar])
+
+  async function salvar(e) {
+    e.preventDefault()
+    setErro('')
+    const data = {}
+    MEDIDAS.forEach((m) => { const v = num(vals[m.k]); if (vals[m.k] && v > 0) data[m.k] = v })
+    if (Object.keys(data).length === 0) return setErro('Preencha pelo menos uma medida.')
+    const { error } = await sb.from('measurements').insert({ day: dia, data })
+    if (error) return setErro('Não foi possível salvar. Rodou o schema-v2.sql no Supabase?')
+    // peso também entra na aba Peso
+    if (data.peso) await sb.from('weights').insert({ day: dia, kg: data.peso })
+    setVals({})
+    carregar()
+  }
+
+  async function apagar(id) {
+    if (!confirm('Apagar este registro de medidas?')) return
+    await sb.from('measurements').delete().eq('id', id)
+    carregar()
+  }
+
+  function marcarFeita() {
+    const d = new Date(proxima + 'T12:00:00')
+    const base = new Date()
+    base.setHours(12, 0, 0, 0)
+    const nova = new Date(Math.max(d.getTime(), base.getTime()))
+    nova.setDate(nova.getDate() + 28)
+    const s = nova.toLocaleDateString('sv-SE')
+    localStorage.setItem('reavaliacao', s)
+    setProxima(s)
+  }
+
+  function mudarData() {
+    const s = prompt('Nova data da próxima atualização (AAAA-MM-DD):', proxima)
+    if (s && /^\d{4}-\d{2}-\d{2}$/.test(s)) { localStorage.setItem('reavaliacao', s); setProxima(s) }
+  }
+
+  const ultimo = regs[regs.length - 1]
+  const dataBonita = (s) => new Date(s + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })
+
+  return (
+    <>
+      <h1>Medidas</h1>
+      <p className="sub">Uma vez por mês, de manhã, em jejum, fora da menstruação, com a fita no mesmo ponto.</p>
+
+      <div className="card row between">
+        <div>
+          <div className="s" style={{ fontSize: 13, color: 'var(--muted)' }}>Próxima atualização</div>
+          <b>{dataBonita(proxima)}</b>
+        </div>
+        <div className="stack" style={{ textAlign: 'right' }}>
+          <button className="btn small ghost" onClick={marcarFeita}>Já fiz</button>
+          <div><button className="linkish" onClick={mudarData}>Mudar data</button></div>
+        </div>
+      </div>
+
+      <h2>Novo registro</h2>
+      <form onSubmit={salvar}>
+        <input type="date" value={dia} onChange={(e) => setDia(e.target.value)} style={{ marginBottom: 8 }} />
+        <div className="grid2">
+          {MEDIDAS.map((m) => (
+            <label key={m.k} className="campo">
+              <span>{m.label}</span>
+              <input type="number" inputMode="decimal" step="any" value={vals[m.k] || ''} onChange={(e) => setVals({ ...vals, [m.k]: e.target.value })} />
+            </label>
+          ))}
+        </div>
+        {erro && <div className="error" style={{ marginTop: 8 }}>{erro}</div>}
+        <button className="btn" style={{ width: '100%', marginTop: 12 }}>Salvar medidas</button>
+      </form>
+
+      <h2>Comparação com os 60 kg</h2>
+      <div className="card tbl">
+        <div className="tr head"><span>Região</span><span>Antes</span><span>Último</span><span>Dif.</span></div>
+        {MEDIDAS.map((m) => {
+          const regComVal = [...regs].reverse().find((r) => r.data && r.data[m.k] != null)
+          const atual = regComVal ? Number(regComVal.data[m.k]) : null
+          const dif = atual != null ? atual - m.base : null
+          return (
+            <div className="tr" key={m.k}>
+              <span>{m.label}</span>
+              <span>{fmt(m.base)}</span>
+              <span>{atual != null ? fmt(atual) : '–'}</span>
+              <span>{dif != null ? (dif > 0 ? '+' : '') + fmt(dif) : '–'}</span>
+            </div>
+          )
+        })}
+      </div>
+      <p className="sub" style={{ marginTop: 8 }}>Com musculação, é possível chegar nas medidas antigas pesando um pouco mais que 60 kg.</p>
+
+      <h2>Registros</h2>
+      <div className="stack">
+        {regs.length === 0 && <div className="empty">Nenhum registro ainda.</div>}
+        {[...regs].reverse().map((r) => (
+          <div key={r.id} className="card item">
+            <div className="grow t">{dataBonita(r.day)}</div>
+            <span className="pill">{Object.keys(r.data || {}).length} medidas</span>
+            <button className="icon-btn" aria-label="Apagar registro" onClick={() => apagar(r.id)}>×</button>
+          </div>
+        ))}
+      </div>
+    </>
   )
 }

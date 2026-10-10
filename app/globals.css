@@ -81,3 +81,13 @@ input:focus-visible, button:focus-visible { outline: 3px solid var(--plum); outl
 .chart { width: 100%; height: 150px; display: block; }
 
 @media (prefers-reduced-motion: reduce) { .ring .bar { transition: none; } }
+
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.campo { display: block; font-size: 13px; color: var(--muted); }
+.campo span { display: block; margin: 0 0 4px 2px; }
+.tbl { padding: 6px 12px; }
+.tr { display: grid; grid-template-columns: 1.6fr 1fr 1fr 1fr; gap: 6px; padding: 9px 0; font-size: 14px; border-top: 1px solid var(--line); }
+.tr:first-child { border-top: 0; }
+.tr.head { color: var(--muted); font-size: 12px; font-weight: 600; }
+.tr span:nth-child(n+2) { text-align: right; font-variant-numeric: tabular-nums; }
+.tabs button { padding: 10px 2px; font-size: 13px; }
