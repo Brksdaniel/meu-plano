@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { getSupabase } from '../lib/supabase'
+import { aplicarFila, enfileirar, erroDeRede, lerCacheTreinos, salvarCacheTreinos, sincronizar } from '../lib/offline'
 
 const hoje = () => new Date().toLocaleDateString('sv-SE') // AAAA-MM-DD no fuso do celular
 const num = (v) => Number(String(v).replace(',', '.'))
@@ -68,15 +69,36 @@ export default function Page() {
   useEffect(() => {
     const sb = getSupabase()
     sb.auth.getSession().then(({ data }) => {
-      setSession(data.session)
+      setSession(comFallbackOffline(data.session))
       setReady(true)
     })
-    const { data } = sb.auth.onAuthStateChange((_e, s) => setSession(s))
+    const { data } = sb.auth.onAuthStateChange((_e, s) => setSession(comFallbackOffline(s)))
+    registrarServiceWorker()
     return () => data.subscription.unsubscribe()
   }, [])
 
   if (!ready) return null
   return session ? <App /> : <Auth />
+}
+
+// Sem internet o token não renova e o Supabase devolve sessão nula.
+// Se havia login salvo neste aparelho, entra mesmo assim (os dados vêm do cache local).
+function comFallbackOffline(s) {
+  if (s || navigator.onLine) return s
+  try {
+    const salvo = Object.keys(localStorage).some((k) => /^sb-.+-auth-token$/.test(k))
+    return salvo ? { offline: true } : null
+  } catch { return null }
+}
+
+function registrarServiceWorker() {
+  if (!('serviceWorker' in navigator) || process.env.NODE_ENV !== 'production') return
+  navigator.serviceWorker.register('/sw.js').catch(() => {})
+  navigator.serviceWorker.ready.then((reg) => {
+    // Guarda também o JS/CSS que já foi baixado antes do service worker assumir.
+    const urls = performance.getEntriesByType('resource').map((e) => e.name).filter((u) => u.startsWith(location.origin + '/_next/static/'))
+    if (reg.active) reg.active.postMessage({ tipo: 'cachear', urls })
+  })
 }
 
 function Auth() {
@@ -135,6 +157,14 @@ function App() {
     setToast(t)
     setTimeout(() => setToast(''), 1800)
   }, [])
+
+  // Envia as marcações feitas offline assim que houver internet.
+  useEffect(() => {
+    const enviar = () => sincronizar(sb).then((n) => n && avisar(n + (n === 1 ? ' marcação sincronizada' : ' marcações sincronizadas')))
+    enviar()
+    window.addEventListener('online', enviar)
+    return () => window.removeEventListener('online', enviar)
+  }, [sb, avisar])
 
   return (
     <>
@@ -689,32 +719,58 @@ function Treinos({ sb, avisar }) {
   const [pronto, setPronto] = useState(false)
   const [semTabelas, setSemTabelas] = useState(false)
   const [edit, setEdit] = useState(null)
+  const [offline, setOffline] = useState(false)
+
+  const mostrar = useCallback((treinosLista, agendaLista, feitosLista) => {
+    setTreinos(treinosLista)
+    const mapa = {}
+    agendaLista.forEach((r) => { mapa[r.weekday] = r.workout_id })
+    setAgenda(mapa)
+    setFeitos(aplicarFila(feitosLista, dia))
+    setPronto(true)
+  }, [dia])
 
   const carregar = useCallback(async () => {
+    await sincronizar(sb)
     const [w, s, p] = await Promise.all([
       sb.from('workouts').select('*').order('created_at'),
       sb.from('workout_schedule').select('*'),
       sb.from('plan_done').select('key').eq('day', dia),
     ])
+    const semRede = [w, s, p].some((r) => erroDeRede(r.error))
+    setOffline(semRede)
+    if (semRede) {
+      const c = lerCacheTreinos()
+      if (c) return mostrar(c.treinos, c.agenda, c.dia === dia ? c.feitos : [])
+      return mostrar([], [], [])
+    }
     setSemTabelas(Boolean(w.error))
-    setTreinos(w.data || [])
-    const mapa = {}
-    ;(s.data || []).forEach((r) => { mapa[r.weekday] = r.workout_id })
-    setAgenda(mapa)
-    setFeitos(new Set((p.data || []).map((x) => x.key)))
-    setPronto(true)
-  }, [sb, dia])
+    const feitosLista = (p.data || []).map((x) => x.key)
+    salvarCacheTreinos({ dia, treinos: w.data || [], agenda: s.data || [], feitos: feitosLista })
+    mostrar(w.data || [], s.data || [], feitosLista)
+  }, [sb, dia, mostrar])
 
-  useEffect(() => { carregar() }, [carregar])
+  useEffect(() => {
+    carregar()
+    window.addEventListener('online', carregar)
+    return () => window.removeEventListener('online', carregar)
+  }, [carregar])
 
   const definido = (d) => Object.prototype.hasOwnProperty.call(agenda, d)
   const treinoDoDia = (d) => (definido(d) && agenda[d] ? treinos.find((t) => t.id === agenda[d]) || null : null)
 
+  // Marca na hora (funciona sem internet) e envia pela fila.
   async function marcarEx(id) {
     const key = 'ex:' + id
-    if (feitos.has(key)) await sb.from('plan_done').delete().eq('key', key).eq('day', dia)
-    else await sb.from('plan_done').insert({ key, day: dia })
-    carregar()
+    const marcar = !feitos.has(key)
+    const novo = new Set(feitos)
+    if (marcar) novo.add(key)
+    else novo.delete(key)
+    setFeitos(novo)
+    enfileirar({ marcar, key, day: dia })
+    const c = lerCacheTreinos()
+    if (c) salvarCacheTreinos({ ...c, dia, feitos: [...novo] })
+    await sincronizar(sb)
   }
 
   async function definirDia(d, val) {
@@ -832,6 +888,11 @@ function Treinos({ sb, avisar }) {
     <>
       <h1>Treinos</h1>
       <p className="sub">Seus treinos da semana, do jeito que você quiser.</p>
+      {offline && (
+        <div className="card" style={{ marginBottom: 14, background: 'var(--plum-soft)', borderColor: 'var(--plum-soft)', fontSize: 14 }}>
+          <b>Sem internet.</b> Mostrando a última cópia salva. Pode marcar os exercícios: eles são enviados quando a conexão voltar.
+        </div>
+      )}
 
       <div className="seg" role="tablist">
         {[['hoje', 'Treino do dia'], ['semana', 'Semana'], ['treinos', 'Meus treinos']].map(([k, label]) => (
