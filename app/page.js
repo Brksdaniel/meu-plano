@@ -28,11 +28,11 @@ const REAVALIACAO_PADRAO = '2026-10-19' // peso + medidas, de manhã, em jejum, 
 
 const TREINOS = [
   { nome: 'Sem musculação (descanso)', musc: false }, // domingo
-  { nome: 'Costas + bíceps', musc: true },
-  { nome: 'Pernas (quadríceps + glúteo)', musc: true },
-  { nome: 'Peito + ombro + tríceps', musc: true },
-  { nome: 'Posterior + glúteo', musc: true },
-  { nome: 'Costas + bíceps (mais leve) + abdômen', musc: true },
+  { nome: 'Glúteo + posterior (pesado)', musc: true },
+  { nome: 'Superior leve (manutenção)', musc: true },
+  { nome: 'Quadríceps + glúteo', musc: true },
+  { nome: 'Superior leve (manutenção) + abdômen', musc: true },
+  { nome: 'Glúteo + posterior (volume) + abdômen', musc: true },
   { nome: 'Sem musculação (descanso)', musc: false }, // sábado
 ]
 
@@ -46,6 +46,7 @@ const CARDAPIO = [
 // Medidas de quando pesava 60 kg (referência)
 const MEDIDAS = [
   { k: 'peso', label: 'Peso (kg)', base: 60 },
+  { k: 'busto', label: 'Busto', base: null },
   { k: 'cintura', label: 'Cintura', base: 69 },
   { k: 'quadril', label: 'Quadril', base: 90 },
   { k: 'gluteo', label: 'Glúteo', base: 94 },
@@ -61,6 +62,12 @@ const MEDIDAS = [
   { k: 'ante_d', label: 'Antebraço D', base: 24 },
   { k: 'ante_e', label: 'Antebraço E', base: 24 },
 ]
+
+// Primeiro registro do plano novo (cm; peso em kg)
+const MEDIDAS_INICIAIS = {
+  day: '2026-10-19',
+  data: { peso: 75, busto: 101, cintura: 84, quadril: 102, gluteo: 109, culote: 105, coxa_d: 64, coxa_e: 63, pan_d: 37, pan_e: 37, torax: 86, ombros: 115, braco_d: 35, braco_e: 35, ante_d: 26, ante_e: 26 },
+}
 
 export default function Page() {
   const [session, setSession] = useState(null)
@@ -527,7 +534,7 @@ function PlanoDoDia({ sb, dia }) {
 
   const linhas = [
     ...CARDAPIO,
-    { k: 'bike', t: 'Bike · 30 min', d: treino.musc ? 'Todo dia' : 'Ritmo leve a moderado' },
+    { k: 'bike', t: 'Bike · 30 min', d: 'Todo dia, ritmo moderado' },
     ...(treino.musc ? [{ k: 'treino', t: 'Treino: ' + treino.nome, d: 'Musculação' }] : []),
   ]
   const feitosN = linhas.filter((l) => feitos.has(l.k)).length
@@ -575,11 +582,23 @@ function Medidas({ sb }) {
   const [vals, setVals] = useState({})
   const [proxima, setProxima] = useState(REAVALIACAO_PADRAO)
   const [erro, setErro] = useState('')
+  const [carregado, setCarregado] = useState(false)
 
   const carregar = useCallback(async () => {
-    const { data } = await sb.from('measurements').select('*').order('day').order('created_at')
+    const { data, error } = await sb.from('measurements').select('*').order('day').order('created_at')
     setRegs(data || [])
+    setCarregado(!error)
   }, [sb])
+
+  async function registrarIniciais() {
+    const { day, data } = MEDIDAS_INICIAIS
+    const { error } = await sb.from('measurements').insert({ day, data })
+    if (error) return setErro('Não foi possível salvar. Confira a internet e tente de novo.')
+    const { data: pesos } = await sb.from('weights').select('id').eq('day', day)
+    if (pesos && pesos.length === 0) await sb.from('weights').insert({ day, kg: data.peso })
+    if (proxima <= day) marcarFeita()
+    carregar()
+  }
 
   useEffect(() => {
     setProxima(localStorage.getItem('reavaliacao') || REAVALIACAO_PADRAO)
@@ -641,6 +660,14 @@ function Medidas({ sb }) {
         </div>
       </div>
 
+      {carregado && !regs.some((r) => r.day === MEDIDAS_INICIAIS.day) && (
+        <div className="card" style={{ marginTop: 14, background: 'var(--plum-soft)', borderColor: 'var(--plum-soft)' }}>
+          <b>Medidas de 19/10/2026</b>
+          <div className="sub" style={{ margin: '4px 0 10px' }}>75 kg, busto 101, cintura 84, quadril 102, glúteo 109 e as demais já preenchidas.</div>
+          <button className="btn small" onClick={registrarIniciais}>Registrar como primeiro registro</button>
+        </div>
+      )}
+
       <h2>Novo registro</h2>
       <form onSubmit={salvar}>
         <input type="date" value={dia} onChange={(e) => setDia(e.target.value)} style={{ marginBottom: 8 }} />
@@ -662,11 +689,11 @@ function Medidas({ sb }) {
         {MEDIDAS.map((m) => {
           const regComVal = [...regs].reverse().find((r) => r.data && r.data[m.k] != null)
           const atual = regComVal ? Number(regComVal.data[m.k]) : null
-          const dif = atual != null ? atual - m.base : null
+          const dif = atual != null && m.base != null ? atual - m.base : null
           return (
             <div className="tr" key={m.k}>
               <span>{m.label}</span>
-              <span>{fmt(m.base)}</span>
+              <span>{m.base != null ? fmt(m.base) : '–'}</span>
               <span>{atual != null ? fmt(atual) : '–'}</span>
               <span>{dif != null ? (dif > 0 ? '+' : '') + fmt(dif) : '–'}</span>
             </div>
@@ -696,16 +723,51 @@ function Medidas({ sb }) {
 const DIAS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
 const ORDEM_SEMANA = [1, 2, 3, 4, 5, 6, 0]
 const novoId = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2))
-const exVazio = () => ({ id: novoId(), name: '', sets: '', reps: '', notes: '' })
-const ex = (name, sets, reps, notes = '') => ({ id: novoId(), name, sets, reps, notes })
+const exVazio = () => ({ id: novoId(), name: '', sets: '', reps: '', notes: '', load: '' })
+const ex = (name, sets, reps, notes = '') => ({ id: novoId(), name, sets, reps, notes, load: '' })
 
-// Sugestão inicial, só um ponto de partida: ela pode editar tudo.
+// Plano out/2026: inferior prioridade (3 dias, foco em glúteo), superior em manutenção (2 dias).
+const NOTA_INFERIOR = 'Compostos 6-10 reps, acessórios 10-15. Pare a 1-2 reps da falha. Bateu o topo das reps em todas as séries? Suba a carga.'
+const NOTA_SUPERIOR = 'Manutenção: carga moderada, 2-3 reps longe da falha. Não precisa subir carga toda semana.'
 const EXEMPLOS = [
-  { dia: 1, name: 'Costas + bíceps', exercises: () => [ex('Puxada frontal', '3', '12'), ex('Remada baixa', '3', '12'), ex('Remada curvada', '3', '10'), ex('Rosca direta', '3', '12'), ex('Rosca martelo', '3', '12')] },
-  { dia: 2, name: 'Pernas (quadríceps + glúteo)', exercises: () => [ex('Agachamento', '4', '10'), ex('Leg press', '3', '12'), ex('Cadeira extensora', '3', '15'), ex('Afundo', '3', '10', 'Cada perna'), ex('Elevação pélvica', '3', '12')] },
-  { dia: 3, name: 'Peito + ombro + tríceps', exercises: () => [ex('Supino reto', '3', '10'), ex('Supino inclinado com halteres', '3', '12'), ex('Desenvolvimento', '3', '12'), ex('Elevação lateral', '3', '15'), ex('Tríceps na corda', '3', '12')] },
-  { dia: 4, name: 'Posterior + glúteo', exercises: () => [ex('Stiff', '4', '10'), ex('Mesa flexora', '3', '12'), ex('Cadeira abdutora', '3', '15'), ex('Glúteo na polia', '3', '12'), ex('Elevação pélvica', '3', '12')] },
-  { dia: 5, name: 'Costas + bíceps (leve) + abdômen', exercises: () => [ex('Puxada neutra', '3', '12'), ex('Remada unilateral', '3', '12'), ex('Rosca alternada', '3', '12'), ex('Abdominal infra', '3', '15'), ex('Prancha', '3', '30s')] },
+  { dia: 1, name: 'Glúteo + posterior (pesado)', notes: NOTA_INFERIOR, exercises: () => [
+    ex('Elevação pélvica com barra', '4', '6-10', 'Pesada. Segure 1 s no topo.'),
+    ex('Stiff / RDL com barra', '4', '6-10', 'Quadril para trás, coluna neutra.'),
+    ex('Mesa flexora', '3', '10-12'),
+    ex('Cadeira abdutora', '3', '12-15'),
+    ex('Panturrilha em pé', '3', '10-15'),
+  ] },
+  { dia: 2, name: 'Superior leve (manutenção)', notes: NOTA_SUPERIOR, exercises: () => [
+    ex('Puxada frontal', '2', '10-12'),
+    ex('Remada baixa', '2', '10-12'),
+    ex('Supino reto com halteres', '3', '10-12'),
+    ex('Desenvolvimento com halteres', '2', '10-12'),
+  ] },
+  { dia: 3, name: 'Quadríceps + glúteo', notes: NOTA_INFERIOR, exercises: () => [
+    ex('Agachamento livre ou hack', '4', '6-10'),
+    ex('Leg press com pés altos', '3', '8-10', 'Pés no alto e afastados: mais glúteo.'),
+    ex('Búlgaro', '3', '8-10', 'Cada perna. Tronco um pouco inclinado à frente.'),
+    ex('Glúteo no cabo', '3', '12-15', 'Cada perna.'),
+    ex('Cadeira abdutora', '3', '12-15'),
+  ] },
+  { dia: 4, name: 'Superior leve (manutenção) + abdômen', notes: NOTA_SUPERIOR, exercises: () => [
+    ex('Puxada neutra', '2', '10-12'),
+    ex('Remada unilateral', '2', '10-12', 'Cada lado.'),
+    ex('Supino inclinado com halteres', '3', '10-12'),
+    ex('Face pull', '2', '12-15', 'Leve, para postura.'),
+    ex('Prancha', '3', '30-45s'),
+    ex('Abdominal infra', '3', '12-15'),
+  ] },
+  { dia: 5, name: 'Glúteo + posterior (volume) + abdômen', notes: NOTA_INFERIOR, exercises: () => [
+    ex('Elevação pélvica com barra', '4', '8-10', 'Um pouco mais leve que segunda.'),
+    ex('Stiff com halteres', '3', '8-10'),
+    ex('Mesa flexora', '3', '12-15'),
+    ex('Glúteo no cabo', '3', '12-15', 'Cada perna.'),
+    ex('Cadeira abdutora', '3', '15'),
+    ex('Panturrilha sentada', '3', '12-15'),
+    ex('Prancha', '3', '30-45s'),
+    ex('Abdominal infra', '3', '12-15'),
+  ] },
 ]
 
 function Treinos({ sb, avisar }) {
@@ -773,6 +835,20 @@ function Treinos({ sb, avisar }) {
     await sincronizar(sb)
   }
 
+  // Guarda a carga usada no próprio exercício (fica como referência para o próximo treino).
+  async function salvarCarga(workoutId, exId, valor) {
+    const load = valor.trim()
+    const t = treinos.find((w) => w.id === workoutId)
+    const atual = t && (t.exercises || []).find((x) => x.id === exId)
+    if (!atual || (atual.load || '') === load) return
+    const novos = treinos.map((w) => (w.id !== workoutId ? w : { ...w, exercises: w.exercises.map((x) => (x.id === exId ? { ...x, load } : x)) }))
+    setTreinos(novos)
+    const c = lerCacheTreinos()
+    if (c) salvarCacheTreinos({ ...c, treinos: novos })
+    enfileirar({ tipo: 'carga', workoutId, exId, load })
+    await sincronizar(sb)
+  }
+
   async function definirDia(d, val) {
     if (val === 'default') await sb.from('workout_schedule').delete().eq('weekday', d)
     else await sb.from('workout_schedule').upsert({ weekday: d, workout_id: val === 'rest' ? null : val }, { onConflict: 'user_id,weekday' })
@@ -780,7 +856,8 @@ function Treinos({ sb, avisar }) {
   }
 
   async function carregarExemplos() {
-    const linhas = EXEMPLOS.map((e) => ({ name: e.name, notes: 'Sugestão inicial: ajuste exercícios, séries e cargas do seu jeito.', exercises: e.exercises() }))
+    if (treinos.length > 0 && !confirm('Criar os 5 treinos do plano novo e colocar na semana (seg a sex)? Os treinos atuais continuam em Meus treinos para você apagar se quiser.')) return
+    const linhas = EXEMPLOS.map((e) => ({ name: e.name, notes: e.notes, exercises: e.exercises() }))
     const { data, error } = await sb.from('workouts').insert(linhas).select()
     if (error || !data) return avisar('Não foi possível criar os treinos')
     const porNome = Object.fromEntries(data.map((w) => [w.name, w.id]))
@@ -789,7 +866,7 @@ function Treinos({ sb, avisar }) {
       return { weekday: d, workout_id: e ? porNome[e.name] : null }
     })
     await sb.from('workout_schedule').upsert(agendaNova, { onConflict: 'user_id,weekday' })
-    avisar('Treinos de exemplo criados')
+    avisar('Plano novo aplicado')
     carregar()
   }
 
@@ -914,7 +991,7 @@ function Treinos({ sb, avisar }) {
               Você ainda não tem treinos cadastrados.
               <div className="row" style={{ justifyContent: 'center', marginTop: 12, flexWrap: 'wrap' }}>
                 <button className="btn" onClick={novoTreino}>Criar meu primeiro treino</button>
-                <button className="btn ghost" onClick={carregarExemplos}>Usar treinos de exemplo</button>
+                <button className="btn ghost" onClick={carregarExemplos}>Usar o plano pronto</button>
               </div>
             </div>
           )}
@@ -956,6 +1033,10 @@ function Treinos({ sb, avisar }) {
                       <div className="grow">
                         <div className={'t' + (on ? ' done-text' : '')}>{x.name}</div>
                         {x.notes && <div className="ex-notes">{x.notes}</div>}
+                        <label className="carga">
+                          <span>Carga</span>
+                          <input type="text" inputMode="decimal" placeholder="kg" defaultValue={x.load || ''} key={x.load || ''} onBlur={(e) => salvarCarga(verTreino.id, x.id, e.target.value)} aria-label={'Carga usada em ' + x.name} />
+                        </label>
                       </div>
                       <span className="pill">{x.sets || '–'} × {x.reps || '–'}</span>
                     </div>
@@ -1003,7 +1084,14 @@ function Treinos({ sb, avisar }) {
           {treinos.length === 0 && (
             <div className="card empty">
               Nenhum treino cadastrado.
-              <div style={{ marginTop: 12 }}><button className="btn ghost" onClick={carregarExemplos}>Usar treinos de exemplo</button></div>
+              <div style={{ marginTop: 12 }}><button className="btn ghost" onClick={carregarExemplos}>Usar o plano pronto</button></div>
+            </div>
+          )}
+          {treinos.length > 0 && !treinos.some((t) => t.name === EXEMPLOS[0].name) && (
+            <div className="hero-treino" style={{ marginBottom: 10 }}>
+              <h2>Plano novo disponível</h2>
+              <p className="sub" style={{ margin: '6px 0 10px' }}>3 dias de inferior com foco em glúteo e 2 dias de superior em manutenção, seg a sex.</p>
+              <button className="btn small" onClick={carregarExemplos}>Aplicar plano novo</button>
             </div>
           )}
           <div className="grid-auto">

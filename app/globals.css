@@ -117,6 +117,8 @@ select:focus-visible { outline: 3px solid var(--plum); outline-offset: 1px; }
 .grid-auto { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
 .ex-card { align-items: flex-start; }
 .ex-notes { font-size: 13px; color: var(--muted); margin-top: 3px; }
+.carga { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; color: var(--muted); }
+.carga input[type=text] { width: 90px; padding: 8px 10px; border-radius: 10px; }
 .ex-edit { padding: 12px; }
 .ex-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .span2 { grid-column: 1 / -1; }
